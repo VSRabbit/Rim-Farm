@@ -5,25 +5,11 @@ import subprocess
 from pathlib import Path
 import json
 import logging
+from logger_utils import setup_logger
 
 class CameraModule:
     def __init__(self, config):
-        # Configure logging
-
-        log_dir = Path("logs")
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / f"camera_{datetime.now().strftime('%Y-%m-%d')}.log"
-
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_file, encoding='utf-8'),
-                logging.StreamHandler()
-            ]
-
-        )
-        self.logger = logging.getLogger(__name__)
+        self.logger = setup_logger("camera", "camera")
         
         try:
             # Load configuration
@@ -66,9 +52,9 @@ class CameraModule:
         timestamp = datetime.now().strftime("%Y-%m-%d-%H%M")
         filename = f"{timestamp}.jpg"
         filepath = self.save_path / filename
-        
+
         self.logger.info(f"Starting photo capture, saving to: {filepath}")
-        
+
         command = [
             "libcamera-jpeg",
             "-o", str(filepath),
@@ -76,14 +62,15 @@ class CameraModule:
             "--rotation", str(self.rotation),
             "--width", str(self.width),
             "--height", str(self.height),
-            "--nopreview",  # No preview mode
-
-            "--awb",str(self.awb) ,
+            "--nopreview",
+            "--awb", str(self.awb),
             "--metering", str(self.metering),
             "--exposure", str(self.exposure),
             "--denoise", str(self.denoise)
         ]
-        
+
+        self.logger.info(f"Photo capture command: {' '.join(command)}")  # Add this line
+
         try:
             result = subprocess.run(
                 command, 
@@ -91,7 +78,7 @@ class CameraModule:
                 capture_output=True,
                 timeout=30  # Add timeout
             )
-            
+            self.logger.info("Photo captured successfully")
             return True
         except subprocess.CalledProcessError as e:
             self.logger.error(f"Photo capture failed: {e.stderr.decode('utf-8')}")
@@ -134,7 +121,7 @@ if __name__ == "__main__":
         "resolution": "2592x1944",
         # advanced settings
         "awb":"auto",
-        "metering": "centre",
+        "metering": "average",
         "exposure": "normal",
         "denoise": "auto"
 

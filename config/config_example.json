@@ -30,8 +30,8 @@
     "email": {
         "sender_email": "your_email@outlook.com",
         "sender_password": "your_password",
-        "subscribers": ["subscriber1@example.com", "subscriber2@example.com"],
-        "whitelist": ["allowed_sender@example.com"]
+        "subscribers": ["subscriber1@example.com", "subscriber2@example.com"]
+        
     },
     "camera": {
         "capture_times": [
@@ -55,9 +55,9 @@
         "rotation": 0,
         "quality": 100,
         "resolution": "2592x1944",
-        "awb": "indoor",
+        "awb": "fluorescent",
         "metering": "average",
-        "exposure": "normal",
+        "exposure": "sport",
         "denoise": "cdn_hq"
     }
 }
