@@ -37,10 +37,12 @@ class EmailNotifier:
         self.password = config['sender_password']
         self.subscribers = config['subscribers']
         self.cam_path = Path("cam")
+        self.last_connection_check = 0
+        self.connection_check_interval = 300  # Check connection every 5 minutes
         
         # Initialize connection
         self.connect()
-        
+
     def connect(self):
         try:
             # IMAP connection
@@ -66,6 +68,23 @@ class EmailNotifier:
         except Exception as e:
             self.logger.error(f"Connection failed: {str(e)}")
             return False
+
+    def check_connection(self):
+        """Check connection status every 5 minutes"""
+        current_time = time.time()
+        if current_time - self.last_connection_check > self.connection_check_interval:
+            self.logger.debug("Performing scheduled connection check")
+            try:
+                # Test IMAP connection
+                self.imap.noop()
+                # Test SMTP connection
+                self.smtp.noop()
+                self.last_connection_check = current_time
+                return True
+            except Exception as e:
+                self.logger.warning(f"Connection check failed: {str(e)}, reconnecting...")
+                return self.connect()
+        return True
 
     def get_latest_images(self, num=6):
         """Get latest 10 images"""
@@ -93,19 +112,28 @@ class EmailNotifier:
         """Send email with retry mechanism"""
         for attempt in range(max_retries):
             try:
-                self.smtp.quit()  # Close existing connection
-                # Create new connection
-                self.smtp = smtplib.SMTP_SSL("smtp.qq.com", 465, timeout=30)
-                self.smtp.login(self.email, self.password)
+                # Check SMTP connection status
+                try:
+                    self.smtp.noop()
+                except:
+                    self.logger.info("SMTP connection lost, reconnecting...")
+                    if hasattr(self, 'smtp'):
+                        try:
+                            self.smtp.quit()
+                        except:
+                            pass
+                    self.smtp = smtplib.SMTP_SSL("smtp.qq.com", 465, timeout=30)
+                    self.smtp.login(self.email, self.password)
                 
-                # Use sendmail instead of send_message for better compatibility
+                # Send email
                 self.smtp.sendmail(self.email, to_addr, msg.as_string())
+                self.logger.info("SMTP send successful")
                 return True
                 
             except Exception as e:
                 self.logger.error(f"Send attempt {attempt + 1} failed: {str(e)}")
                 if attempt < max_retries - 1:
-                    time.sleep(5)  # Wait 5 seconds before retry
+                    time.sleep(5)
                     continue
         return False
 
@@ -178,65 +206,67 @@ class EmailNotifier:
             return False
 
     def check_emails(self):
-        """
-        Check new emails in inbox.
-        
-        - Verifies IMAP connection status
-        - Searches for unread messages
-        - Processes messages with 'check' in subject from subscribers
-        - Sends response with latest images
-        - Marks processed emails as read
-        """
+        """Check new emails and ensure connection status"""
         try:
-            # Check IMAP connection status
-            try:
-                self.imap.noop()
-            except:
-                self.logger.warning("IMAP connection lost, reconnecting...")
-                if not self.connect():
-                    return
+            # Check connection status periodically
+            if not self.check_connection():
+                self.logger.error("Connection check failed")
+                return
                 
             self.imap.select('INBOX')
-            # Search for unread emails only
             _, messages = self.imap.search(None, 'UNSEEN')
             
+            if not messages[0]:
+                return
+                
             for num in messages[0].split():
                 try:
                     _, msg = self.imap.fetch(num, '(RFC822)')
                     email_body = msg[0][1]
                     email_message = email.message_from_bytes(email_body)
                     
-                    # Decode subject with proper character encoding
                     subject = decode_header(email_message["Subject"])[0][0]
                     if isinstance(subject, bytes):
                         subject = subject.decode()
                     
-                    # Extract sender's email address
                     from_addr = email.utils.parseaddr(email_message["From"])[1]
                     
-                    # Process only if sender is subscriber and subject contains "check"
                     if from_addr in self.subscribers and "check" in subject.lower():
                         self.logger.info(f"Processing check request from {from_addr}")
                         images = self.get_latest_images()
-                        if images:
-                            if self.send_response(from_addr, images):
-                                # Mark email as processed
-                                self.imap.store(num, '+FLAGS', '\\Seen')
-                                self.logger.info(f"Marked email from {from_addr} as read")
-                    else:
-                        # Skip non-check requests
-                        self.logger.debug(f"Skipping email from {from_addr}, subject: {subject}")
                         
+                        if images:
+                            # Ensure fresh SMTP connection before sending
+                            if hasattr(self, 'smtp'):
+                                try:
+                                    self.smtp.quit()
+                                except:
+                                    pass
+                                    
+                            self.smtp = smtplib.SMTP_SSL("smtp.qq.com", 465)
+                            self.smtp.login(self.email, self.password)
+                            
+                            if self.send_response(from_addr, images):
+                                try:
+                                    self.imap.store(num, '+FLAGS', '\\Seen')
+                                    self.logger.info(f"Marked email from {from_addr} as read")
+                                except Exception as e:
+                                    self.logger.error(f"Failed to mark email as read: {str(e)}")
+                                    # Even if marking as read fails, we still sent the response
+                            else:
+                                self.logger.error(f"Failed to send response to {from_addr}")
+                                
                 except Exception as e:
                     self.logger.error(f"Error processing email {num}: {str(e)}")
+                    self.connect()  # Try to reconnect on error
                     continue
                     
         except Exception as e:
             self.logger.error(f"Error checking emails: {str(e)}")
-            self.connect()  # Reconnect
+            self.connect()
 
     def close(self):
-        """Close connections"""
+        """Close IMAP and SMTP connections"""
         try:
             self.imap.logout()
             self.smtp.quit()
